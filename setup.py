@@ -18,7 +18,7 @@ setuptools.setup(
     url='https://github.com/closeio/burlybeetle',
     long_description=readme,
     install_requires=[
-        'Fabric==1.10.2',
+        'Fabric',
     ],
     packages=setuptools.find_packages(),
     zip_safe=False,

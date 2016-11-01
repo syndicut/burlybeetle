@@ -6,9 +6,10 @@ from fabric.api import env
 from tasks import *
 
 # Import the per-module tasks as top-level tasks
-from tasks import elasticsearch
+from tasks import elasticsearch, hadoop_datanode_reboot
 
 assert elasticsearch
+assert hadoop_datanode_reboot
 
 env.use_ssh_config = True
 env.shell = '/bin/bash -l -o pipefail -c'
