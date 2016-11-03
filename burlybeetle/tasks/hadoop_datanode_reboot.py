@@ -6,6 +6,13 @@ import json
 from fabric.api import env
 from fabric.api import task
 from fabric.api import settings
+from fabric.api import lcd
+from fabric.api import prefix
+from fabric.api import quiet
+from fabric.api import local
+from fabric.api import execute
+from fabric.api import hide
+from fabric.api import run
 
 from fabric import colors
 from fabric import utils
@@ -61,6 +68,38 @@ def active_namenode(namenodes):
             return namenode
     raise ValueError('Cannot find active namenode')
 
+def get_master(cluster_path):
+    '''
+    Try to get connection string to salt master.
+    Return array with connection strings or empty array
+    if detection failed
+    '''
+    with lcd("{0}/bin".format(cluster_path)), \
+         prefix('source ../conf/salt-config.sh'), \
+         quiet():
+        ssh_user = local('echo $SSH_USER', capture=True)
+        salt_master = local('echo $SALT_MASTER', capture=True)
+        if len(ssh_user) > 0:
+            ret = '{0}@{1}'.format(ssh_user, salt_master)
+        else:
+            ret = salt_master
+        if len(salt_master) > 0:
+            return [ret]
+        else:
+            return []
+
+def get_namenodes_from_reclass():
+    with hide('stdout'):
+        res = run('reclass -o json -b /srv/salt/inventory/ -i')
+    if res.succeeded:
+        inventory = json.loads(res)
+        return inventory['applications']['hadoop.hdfs.namenode']
+
+def get_namenodes(cluster_path):
+    res = execute(get_namenodes_from_reclass, hosts=get_master(cluster_path))
+    _, namenodes = res.popitem()
+    return namenodes
+
 def pre_stop_callback(node):
     """Check for missing blocks"""
     if env.commit:
@@ -97,23 +136,16 @@ env.post_start_callback = post_start_callback
 
 
 @task(default=True)
-def do(namenodes=['m01.delos.hdp.yandex.net', 'm02.delos.hdp.yandex.net']):
+def do(cluster_path):
     """
-    Populates the node list based on elasticsearch API information
-
-    This will connect to a given API endpoint and possibly fill out three
-    role definitions:
-
-        * ``clients``: All elasticsearch nodes where ``master`` is false
-          and ``data`` is false
-        * ``data``: All elasticsearch nodes where ``data`` is true
-        * ``masters``: all elasticsearch nodes where ``master`` is true
-          and ``data`` is false
+    Populates the node list based on namenode API information
 
     Arguments:
 
-        * ``namenodes``: Namenode FQDNs
+        * ``cluster_path``: Path to cluster repo
     """
+    namenodes = get_namenodes(cluster_path)
+    utils.puts('Found namenodes: {0} for cluster path {1}'.format(namenodes, cluster_path))
     data = None
     env.namenodes = namenodes
     active_nn = active_namenode(namenodes)
