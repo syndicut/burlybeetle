@@ -131,6 +131,12 @@ def get_inventory_from_master():
         inventory = json.loads(res)
         return inventory
 
+def enable_balancer():
+    run('echo balance_switch true | hbase shell')
+
+def disable_balancer():
+    run('echo balance_switch false | hbase shell')
+
 def get_inventory(cluster_path):
     res = execute(get_inventory_from_master, hosts=get_master(cluster_path))
     _, inventory = res.popitem()
@@ -158,6 +164,9 @@ def pre_stop_callback(node):
         run('apt-get update; apt-get install config-caching-dns')
         with lcd(env.cluster_path):
             local('bin/bootstrap-salt-minion.sh {0}'.format(node))
+        if node in env.roledefs['regionservers']:
+            disable_balancer()
+            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -d unload $(hostname -f)')
     #    if node in env.namenodes or \
     #       node in env.hbase_masters or \
     #       node in env.resource_managers:
@@ -174,11 +183,6 @@ def post_stop_callback(node):
     if env.commit:
         wait_for_node(node, True)
         time.sleep(10)
-        wait_for_ping(node)
-        time.sleep(15)
-        run("for pkg in $(dpkg -l | awk '$3 ~ /cdh5/ {print $2}'); do init=/etc/init.d/${pkg}; if [ -f $init ]; then $init restart; fi; done")
-        wait_for_node(node)
-        time.sleep(10)
     else:
         utils.puts('wait for node {} (noop): to leave'.format(node))
         utils.puts('wait for node {} (noop): to come back'.format(node))
@@ -190,12 +194,18 @@ def post_stop_callback(node):
 
 
 def pre_start_callback(node):
-    pass
+    if env.commit:
+        wait_for_ping(node)
+        with settings(connection_attempts=60):
+            run("for pkg in $(dpkg -l | awk '$3 ~ /cdh5/ {print $2}'); do init=/etc/init.d/${pkg}; if [ -f $init ]; then $init restart; fi; done")
+        wait_for_node(node)
+        if node in env.roledefs['regionservers']:
+            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -d load $(hostname -f)')
+            enable_balancer()
 
 
 def post_start_callback(node):
     pass
-
 
 # Override callbacks
 env.pre_stop_callback = pre_stop_callback
@@ -204,7 +214,7 @@ env.pre_start_callback = pre_start_callback
 env.post_start_callback = post_start_callback
 
 @task(default=True)
-def do(cluster_path):
+def do(cluster_path, skip=0):
     """
     Populates the node list based on namenode API information
 
@@ -248,7 +258,7 @@ def do(cluster_path):
         nm_nodes = map(lambda node: node['nodeHostName'], data['nodes']['node'])
         env.roledefs['nodemanagers'] = nm_nodes
 
-    env.hosts = data_nodes
+    env.hosts = data_nodes[int(skip):]
     with lcd(env.cluster_path):
         local('git pull --rebase')
         with lcd('bin'):
