@@ -22,7 +22,7 @@ from burlybeetle.http import curl_and_json, curl
 
 
 DEFAULT_INTERVAL = 5  # seconds
-DEFAULT_TRIES = 360  # multiply by above is 1800: 30 minutes
+DEFAULT_TRIES = 420  # multiply by above is 2100: 35 minutes
 
 NN_URL = 'http://{0}:50070'
 HM_URL = 'http://{0}:60010'
@@ -161,12 +161,14 @@ def pre_stop_callback(node):
     """Check for missing blocks"""
     if env.commit:
         wait_for_health()
-        run('apt-get update; apt-get install config-caching-dns')
         with lcd(env.cluster_path):
             local('bin/bootstrap-salt-minion.sh {0}'.format(node))
+        run('apt-get install config-caching-dns')
+        if node in env.roledefs['nodemanagers']:
+            run('/etc/init.d/hadoop-yarn-nodemanager stop')
         if node in env.roledefs['regionservers']:
             disable_balancer()
-            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -d unload $(hostname -f)')
+            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -m16 unload $(hostname -f)')
     #    if node in env.namenodes or \
     #       node in env.hbase_masters or \
     #       node in env.resource_managers:
@@ -182,7 +184,7 @@ def post_stop_callback(node):
     """
     if env.commit:
         wait_for_node(node, True)
-        time.sleep(10)
+        time.sleep(15)
     else:
         utils.puts('wait for node {} (noop): to leave'.format(node))
         utils.puts('wait for node {} (noop): to come back'.format(node))
@@ -196,11 +198,18 @@ def post_stop_callback(node):
 def pre_start_callback(node):
     if env.commit:
         wait_for_ping(node)
+        time.sleep(10)
         with settings(connection_attempts=60):
+            # Workaround for buggy datanode script
+            run("pkill -f org.apache.hadoop.hdfs.server.datanode.DataNode")
             run("for pkg in $(dpkg -l | awk '$3 ~ /cdh5/ {print $2}'); do init=/etc/init.d/${pkg}; if [ -f $init ]; then $init restart; fi; done")
         wait_for_node(node)
         if node in env.roledefs['regionservers']:
-            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -d load $(hostname -f)')
+            region_move_cmd = '/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -m16 load $(hostname -f)'
+            with settings(warn_only = True):
+                res = run(region_move_cmd)
+            if not res.succeeded:
+                run(region_move_cmd)
             enable_balancer()
 
 
