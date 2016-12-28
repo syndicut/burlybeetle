@@ -164,11 +164,13 @@ def pre_stop_callback(node):
         with lcd(env.cluster_path):
             local('bin/bootstrap-salt-minion.sh {0}'.format(node))
         run('apt-get install config-caching-dns')
+        with settings(warn_only=True):
+            local('jctl http://jmon.paysys.yandex.net:8998/api-slb add downtime -host {0} -stop +1hours'.format(node))
         if node in env.roledefs['nodemanagers']:
             run('/etc/init.d/hadoop-yarn-nodemanager stop')
         if node in env.roledefs['regionservers']:
             disable_balancer()
-            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -m16 unload $(hostname -f)')
+            run('/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions unload $(hostname -f)')
     #    if node in env.namenodes or \
     #       node in env.hbase_masters or \
     #       node in env.resource_managers:
@@ -184,7 +186,7 @@ def post_stop_callback(node):
     """
     if env.commit:
         wait_for_node(node, True)
-        time.sleep(15)
+        time.sleep(30)
     else:
         utils.puts('wait for node {} (noop): to leave'.format(node))
         utils.puts('wait for node {} (noop): to come back'.format(node))
@@ -198,19 +200,21 @@ def post_stop_callback(node):
 def pre_start_callback(node):
     if env.commit:
         wait_for_ping(node)
-        time.sleep(10)
+        time.sleep(150)
         with settings(connection_attempts=60):
             # Workaround for buggy datanode script
             run("pkill -f org.apache.hadoop.hdfs.server.datanode.DataNode")
             run("for pkg in $(dpkg -l | awk '$3 ~ /cdh5/ {print $2}'); do init=/etc/init.d/${pkg}; if [ -f $init ]; then $init restart; fi; done")
         wait_for_node(node)
         if node in env.roledefs['regionservers']:
-            region_move_cmd = '/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions -m16 load $(hostname -f)'
+            region_move_cmd = '/usr/bin/hbase org.jruby.Main /usr/lib/hbase/bin/region_mover.rb -f /root/regions load $(hostname -f)'
             with settings(warn_only = True):
                 res = run(region_move_cmd)
             if not res.succeeded:
                 run(region_move_cmd)
             enable_balancer()
+        with settings(warn_only=True):
+            local('jctl http://jmon.paysys.yandex.net:8998/api-slb modify downtime -host {0} -stop +10minutes'.format(node))
 
 
 def post_start_callback(node):
